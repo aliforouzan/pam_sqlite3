@@ -37,16 +37,14 @@
 #include <security/pam_appl.h>
 #include "pam_mod_misc.h"
 
-static int   pam_conv_pass(pam_handle_t *, const char *, int);
-
 void memzero_explicit(void *s, size_t cnt)
 {
     memset(s, 0, cnt);
     __asm__ __volatile__("": :"r"(s): "memory");
 }
 
-static int
-pam_conv_pass(pam_handle_t *pamh, const char *prompt, int options)
+int
+pam_conversation(pam_handle_t *pamh, const char *prompt, int options, char **res)
 {
     int retval;
     const void *item;
@@ -66,9 +64,7 @@ pam_conv_pass(pam_handle_t *pamh, const char *prompt, int options)
     if ((retval = conv->conv(1, msgs, &resp, conv->appdata_ptr)) !=
         PAM_SUCCESS)
         return retval;
-    if ((retval = pam_set_item(pamh, PAM_AUTHTOK, resp[0].resp)) !=
-        PAM_SUCCESS)
-        return retval;
+    *res = strdup(resp[0].resp);
     memzero_explicit(resp[0].resp, strlen(resp[0].resp));
     free(resp[0].resp);
     free(resp);
@@ -81,6 +77,7 @@ pam_get_pass(pam_handle_t *pamh, const char **passp, const char *prompt,
 {
     int retval;
     const void *item = NULL;
+    char *conv_res = NULL;
 
     /*
      * Grab the already-entered password if we might want to use it.
@@ -96,10 +93,16 @@ pam_get_pass(pam_handle_t *pamh, const char **passp, const char *prompt,
         if (options & PAM_OPT_USE_FIRST_PASS)
             return PAM_AUTH_ERR;
         /* Use the conversation function to get a password. */
-        if ((retval = pam_conv_pass(pamh, prompt, options)) !=
-            PAM_SUCCESS ||
-            (retval = pam_get_item(pamh, PAM_AUTHTOK, &item)) !=
+        if ((retval = pam_conversation(pamh, prompt, options, &conv_res)) !=
             PAM_SUCCESS)
+	    return retval;
+	if ((retval = pam_set_item(pamh, PAM_AUTHTOK, conv_res)) != PAM_SUCCESS) {
+		free(conv_res);
+		return retval;
+	}
+	free(conv_res);
+
+	if ((retval = pam_get_item(pamh, PAM_AUTHTOK, &item)) != PAM_SUCCESS)
             return retval;
     }
     *passp = (const char *)item;
